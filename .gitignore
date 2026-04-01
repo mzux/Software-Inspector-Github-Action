@@ -1,0 +1,8 @@
+# 절대 커밋 금지 — 서비스 계정 키
+credentials.json
+
+# 임시 출력 파일
+*.zip
+__pycache__/
+*.pyc
+.env
