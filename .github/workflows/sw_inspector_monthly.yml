@@ -59,8 +59,10 @@ jobs:
       # ── 4. credentials.json 생성 (Secret → 파일) ─────────
       - name: credentials.json 생성
         run: |
-          echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > credentials.json
+          echo $GOOGLE_CREDENTIALS_JSON > credentials.json
           echo "✅ credentials.json 생성 완료"
+        env:
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
 
       # ── 5. 재시도 횟수 계산 ───────────────────────────────
       - name: 재시도 횟수 계산
