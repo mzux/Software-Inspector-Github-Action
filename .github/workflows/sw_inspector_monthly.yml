@@ -33,6 +33,9 @@ concurrency:
 jobs:
   run-inspector:
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
 
     steps:
       # ── 1. 코드 체크아웃 ──────────────────────────────────
