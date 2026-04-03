@@ -3,7 +3,7 @@ name: 월간 소프트웨어 검사 자동화
 # ──────────────────────────────────────────────────────────────
 # 실행 트리거
 # 1. 매월 28~31일 오전 9시 (KST = UTC 00:00) 자동 실행
-# 2. workflow_dispatch: 수동 실행 또는 스크립트 재시도 트리거용
+# 2. workflow_dispatch: 수동 실행 또는 특정 월 재실행용
 # ──────────────────────────────────────────────────────────────
 on:
   schedule:
@@ -14,17 +14,14 @@ on:
 
   workflow_dispatch:
     inputs:
-      retry_count:
-        description: '재시도 횟수 (자동 관리, 수동 실행 시 0으로 두세요)'
-        required: false
-        default: '0'
       month:
         description: '대상 연월 (YYYYMM, 비워두면 자동 판별)'
         required: false
         default: ''
 
 # ──────────────────────────────────────────────────────────────
-# 동시 실행 방지: 같은 날 cron + dispatch가 겹쳐도 1개만 실행
+# 동시 실행 방지
+# 같은 ref에서 중복 실행이 큐에 쌓이지 않도록 직렬화
 # ──────────────────────────────────────────────────────────────
 concurrency:
   group: sw-inspector-${{ github.ref }}
@@ -34,7 +31,6 @@ jobs:
   run-inspector:
     runs-on: ubuntu-latest
     permissions:
-      actions: write
       contents: read
 
     steps:
@@ -52,44 +48,25 @@ jobs:
       # ── 3. 패키지 설치 ────────────────────────────────────
       - name: 패키지 설치
         run: |
-          pip install --upgrade pip
-          pip install \
-            gspread \
-            google-api-python-client \
-            google-auth \
-            requests
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
       # ── 4. credentials.json 생성 (Secret → 파일) ─────────
       - name: credentials.json 생성
-        run: |
-          echo $GOOGLE_CREDENTIALS_JSON > credentials.json
-          echo "✅ credentials.json 생성 완료"
         env:
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
-
-      # ── 5. 재시도 횟수 계산 ───────────────────────────────
-      - name: 재시도 횟수 계산
-        id: retry
         run: |
-          # cron 실행은 항상 0, dispatch는 전달받은 값 사용
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            RETRY=0
-          else
-            RETRY="${{ github.event.inputs.retry_count }}"
-            RETRY="${RETRY:-0}"
-          fi
-          echo "count=${RETRY}" >> $GITHUB_OUTPUT
-          echo "▶ 현재 재시도 횟수: ${RETRY}"
+          printf '%s' "$GOOGLE_CREDENTIALS_JSON" > credentials.json
+          echo "✅ credentials.json 생성 완료"
 
-      # ── 6. 스크립트 실행 ──────────────────────────────────
+      # ── 5. 스크립트 실행 ──────────────────────────────────
       - name: 소프트웨어 검사 자동화 실행
         id: inspector
         env:
-          JANDI_WEBHOOK_URL:        ${{ secrets.JANDI_WEBHOOK_URL }}
-          GDRIVE_SOURCE_FOLDER_ID:  ${{ secrets.GDRIVE_SOURCE_FOLDER_ID }}
-          GDRIVE_UPLOAD_FOLDER_ID:  ${{ secrets.GDRIVE_UPLOAD_FOLDER_ID }}
+          JANDI_WEBHOOK_URL:       ${{ secrets.JANDI_WEBHOOK_URL }}
+          GDRIVE_SOURCE_FOLDER_ID: ${{ secrets.GDRIVE_SOURCE_FOLDER_ID }}
+          GDRIVE_UPLOAD_FOLDER_ID: ${{ secrets.GDRIVE_UPLOAD_FOLDER_ID }}
         run: |
-          # --month 인자: dispatch 수동 입력값 우선, 없으면 스크립트 자동 판별
           MONTH_ARG="${{ github.event.inputs.month }}"
           if [ -n "$MONTH_ARG" ]; then
             MONTH_OPT="--month $MONTH_ARG"
@@ -97,7 +74,6 @@ jobs:
             MONTH_OPT=""
           fi
 
-          # exit code 저장을 위해 set +e 사용
           set +e
           python sw_inspector_auto.py all --notify $MONTH_OPT
           EXIT_CODE=$?
@@ -106,50 +82,23 @@ jobs:
           echo "exit_code=${EXIT_CODE}" >> $GITHUB_OUTPUT
           echo "▶ 스크립트 종료 코드: ${EXIT_CODE}"
 
-          # exit 2가 아닌 실패(1 등)는 워크플로우 자체를 실패로 처리
+          # 0: 성공
+          # 2: 미제출자 존재 (실패 아님, 다음날 cron에 맡김)
+          # 그 외: 실제 오류
           if [ "$EXIT_CODE" -ne 0 ] && [ "$EXIT_CODE" -ne 2 ]; then
-            exit $EXIT_CODE
+            exit "$EXIT_CODE"
           fi
 
-      # ── 7. 미제출자 있을 때 다음날 재시도 예약 ────────────
-      - name: 다음날 재시도 예약 (미제출자 존재 시)
-        if: steps.inspector.outputs.exit_code == '2'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # 별도 설정 불필요 (자동 제공)
-        run: |
-          RETRY=${{ steps.retry.outputs.count }}
-          MAX_RETRY=3  # 28 → 29 → 30 → 31일 (최대 4회 실행)
-
-          echo "현재 재시도: ${RETRY}/${MAX_RETRY}"
-
-          if [ "$RETRY" -lt "$MAX_RETRY" ]; then
-            NEXT=$((RETRY + 1))
-            echo "⏰ 내일 재시도 예약 (${NEXT}/${MAX_RETRY})..."
-
-            gh workflow run sw_inspector_monthly.yml \
-              --ref "${{ github.ref_name }}" \
-              --field retry_count="${NEXT}" \
-              --field month="${{ github.event.inputs.month }}"
-
-            echo "✅ 내일 실행 예약 완료 (workflow_dispatch)"
-          else
-            echo "🚨 최대 재시도 횟수(${MAX_RETRY}) 초과."
-            echo "   수동으로 상황을 확인해주세요."
-            # 최대 재시도 초과 시 워크플로우를 실패로 마킹해 알림 수신
-            exit 1
-          fi
-
-      # ── 8. 완료 요약 출력 ─────────────────────────────────
+      # ── 6. 실행 결과 요약 ─────────────────────────────────
       - name: 실행 결과 요약
         if: always()
         run: |
           EXIT="${{ steps.inspector.outputs.exit_code }}"
-          RETRY="${{ steps.retry.outputs.count }}"
 
-          if   [ "$EXIT" = "0" ]; then
-            echo "🎉 성공: 모든 파일 처리 완료 (재시도: ${RETRY}회)"
+          if [ "$EXIT" = "0" ]; then
+            echo "🎉 성공: 모든 파일 처리 완료"
           elif [ "$EXIT" = "2" ]; then
-            echo "🔁 미제출자 존재: 재시도 예약됨 (${RETRY}회째)"
+            echo "🔁 미제출자 존재: 오늘은 여기서 종료하고 다음날 정기 실행(cron)에서 다시 시도됩니다."
           else
             echo "❌ 오류 발생 (exit code: ${EXIT})"
           fi
