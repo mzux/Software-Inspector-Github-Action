@@ -419,15 +419,8 @@ def upload_to_gdrive(file_path, folder_id=None):
     try:
         service = get_drive_service()
 
-        # 동일 이름 파일이 이미 있으면 삭제 (덮어쓰기 효과)
-        existing = service.files().list(
-            q=f"'{folder_id}' in parents and name = '{filename}' and trashed = false",
-            fields='files(id)'
-        ).execute().get('files', [])
-        for ef in existing:
-            service.files().delete(fileId=ef['id']).execute()
-            logger.info(f"  🗑️  기존 파일 삭제: {ef['id']}")
-
+        # ← 기존 파일 삭제 로직 전체 제거
+        
         file_metadata = {
             'name': filename,
             'parents': [folder_id]
