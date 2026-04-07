@@ -181,6 +181,8 @@ def list_drive_ipt_files(folder_id):
     results = service.files().list(
         q=query,
         fields='files(id, name)',
+        supportsAllDrives=True,          # ← 추가
+        includeItemsFromAllDrives=True,  # ← 추가
         pageSize=200
     ).execute()
     files = results.get('files', [])
@@ -429,7 +431,8 @@ def upload_to_gdrive(file_path, folder_id=None):
         uploaded = service.files().create(
             body=file_metadata,
             media_body=media,
-            fields='id, webViewLink'
+            fields='id, webViewLink',
+            supportsAllDrives=True
         ).execute()
 
         link_url = uploaded.get('webViewLink') or \
