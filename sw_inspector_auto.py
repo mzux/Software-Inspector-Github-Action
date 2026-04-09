@@ -23,6 +23,7 @@ import zipfile
 import argparse
 import logging
 import requests
+import urllib.parse
 import gspread
 import sys
 import tempfile
@@ -428,7 +429,7 @@ def upload_to_github_release(file_path, target_yyyymm):
     # 3. ZIP 파일 업로드
     with open(file_path, 'rb') as f:
         upload_resp = requests.post(
-            f"{upload_url}?name={filename}",
+            f"{upload_url}?name={urllib.parse.quote(filename)}",
             headers={**headers, 'Content-Type': 'application/zip'},
             data=f
         )
