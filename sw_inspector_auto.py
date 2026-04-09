@@ -265,11 +265,13 @@ def send_jandi_reminder(unsubmitted, target_yyyymm):
 # ==========================================
 # 🚀 7. Jandi 웹훅 — 업로드 완료 알림
 # ==========================================
-def send_jandi_upload_link(link_url, target_yyyymm):
+def send_jandi_upload_link(link_url, target_yyyymm, original_filename=None):
     if not JANDI_WEBHOOK_URL:
         return False
 
     display_month = f"{target_yyyymm[:4]}년 {int(target_yyyymm[4:])}월"
+    rename_note = f"\n📝 다운로드 후 파일명을 `{original_filename}`으로 변경 후 제출해주세요." if original_filename else ""
+
     payload = {
         "body": "소프트웨어 검사 마무리",
         "connectColor": "#00C300",
@@ -280,6 +282,7 @@ def send_jandi_upload_link(link_url, target_yyyymm):
                     "이번 달 점검도 무사히 끝났습니다. 모두 고생 많으셨습니다!\n"
                     "제출해주신 모든 검사 결과 압축본이 준비되었습니다.\n\n"
                     f"📦 [ZIP 파일 다운로드]({link_url})\n"
+                    f"{rename_note}\n"
                     "_(로그인 없이 다운로드 가능합니다)_\n\n"
                     "📌 **최종 제출 방법 (참조용)**\n"
                     "압축 파일을 다운로드한 후, [소프트웨어 검사제출 게시판](https://gw.mailplug.com/board/24445)의 안내에 따라 게시글에 답글로 제출합니다."
@@ -389,6 +392,9 @@ def upload_to_github_release(file_path, target_yyyymm):
         return None
 
     filename     = os.path.basename(file_path)
+    # 업로드용 영문 파일명 (GitHub API 한글 오류 우회)
+    upload_filename = f"{target_yyyymm}_SW-Inspection.zip"
+    
     tag          = f"release-{target_yyyymm}"
     release_name = f"{target_yyyymm[:4]}년 {int(target_yyyymm[4:])}월 소프트웨어 검사 결과"
     api_base     = f"https://api.github.com/repos/{GITHUB_REPOSITORY}"
@@ -398,7 +404,7 @@ def upload_to_github_release(file_path, target_yyyymm):
         'X-GitHub-Api-Version': '2022-11-28'
     }
 
-    logger.info(f"\n▶ GitHub Release 업로드 시작: {filename}")
+    logger.info(f"\n▶ GitHub Release 업로드 시작: {filename} (업로드명: {upload_filename})")
 
     # 1. 동일 태그 Release가 있으면 삭제 후 재생성 (매월 덮어쓰기)
     existing = requests.get(f"{api_base}/releases/tags/{tag}", headers=headers)
@@ -429,7 +435,7 @@ def upload_to_github_release(file_path, target_yyyymm):
     # 3. ZIP 파일 업로드
     with open(file_path, 'rb') as f:
         upload_resp = requests.post(
-            f"{upload_url}?name={urllib.parse.quote(filename)}",
+            f"{upload_url}?name={upload_filename}",
             headers={**headers, 'Content-Type': 'application/zip'},
             data=f
         )
@@ -441,6 +447,7 @@ def upload_to_github_release(file_path, target_yyyymm):
     download_url = upload_resp.json().get('browser_download_url')
     logger.info(f"✅ GitHub Release 업로드 완료!")
     logger.info(f"🔗 다운로드 링크: {download_url}")
+    logger.info(f"📝 다운로드 후 파일명을 '{filename}'으로 변경해주세요.")
     return download_url
 
 
@@ -495,9 +502,10 @@ def run(args):
             dry_run=args.dry_run,
         )
         if zip_path and not args.dry_run:
+            original_filename = os.path.basename(zip_path)
             link = upload_to_github_release(zip_path, target_yyyymm)
             if link and args.notify:
-                send_jandi_upload_link(link, target_yyyymm)
+                send_jandi_upload_link(link, target_yyyymm, original_filename)
 
     elif args.command == 'all':
         # ─────────────────────────────────────────────
@@ -521,9 +529,10 @@ def run(args):
             dry_run=args.dry_run,
         )
         if zip_path and not args.dry_run:
+            original_filename = os.path.basename(zip_path)
             link = upload_to_github_release(zip_path, target_yyyymm)
             if link and args.notify:
-                send_jandi_upload_link(link, target_yyyymm)
+                send_jandi_upload_link(link, target_yyyymm, original_filename)
 
     else:
         logger.info("사용법: python sw_inspector_auto.py {check|zip|upload|all} [옵션]")
