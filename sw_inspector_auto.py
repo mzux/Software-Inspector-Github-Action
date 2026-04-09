@@ -384,34 +384,46 @@ def create_submission_zip(doc, target_yyyymm, folder_id=None,
 #   - GITHUB_TOKEN, GITHUB_REPOSITORY는 Actions에서 자동 제공
 # ==========================================
 def upload_to_github_release(file_path, target_yyyymm):
-    """ZIP 파일을 GitHub Release로 업로드하고 다운로드 URL을 반환합니다."""
+    """ZIP 파일을 GitHub Release로 업로드하고 다운로드 URL을 반환합니다.
+    
+    - 이미 당월 Release가 존재하면 업로드를 skip하고 기존 링크를 반환합니다.
+    - Public 저장소에서 로그인 없이 누구나 다운로드 가능합니다.
+    """
     if not GITHUB_TOKEN or not GITHUB_REPOSITORY:
         logger.error("❌ GITHUB_TOKEN 또는 GITHUB_REPOSITORY 환경변수가 없습니다.")
         return None
 
-    filename     = os.path.basename(file_path)
-    # 업로드용 영문 파일명 (GitHub API 한글 오류 우회)
-    upload_filename = f"{target_yyyymm}_SW-Inspection.zip"
-    
-    tag          = f"release-{target_yyyymm}"
-    release_name = f"{target_yyyymm[:4]}년 {int(target_yyyymm[4:])}월 소프트웨어 검사 결과"
-    api_base     = f"https://api.github.com/repos/{GITHUB_REPOSITORY}"
-    headers      = {
-        'Authorization': f'Bearer {GITHUB_TOKEN}',
-        'Accept': 'application/vnd.github+json',
-        'X-GitHub-Api-Version': '2022-11-28'
+    filename        = os.path.basename(file_path)
+    upload_filename = f"{target_yyyymm}_SW-Inspection.zip"  # API 한글 오류 우회
+    tag             = f"release-{target_yyyymm}"
+    release_name    = f"{target_yyyymm[:4]}년 {int(target_yyyymm[4:])}월 소프트웨어 검사 결과"
+    api_base        = f"https://api.github.com/repos/{GITHUB_REPOSITORY}"
+    headers         = {
+        'Authorization':       f'Bearer {GITHUB_TOKEN}',
+        'Accept':              'application/vnd.github+json',
+        'X-GitHub-Api-Version':'2022-11-28'
     }
 
     logger.info(f"\n▶ GitHub Release 업로드 시작: {filename} (업로드명: {upload_filename})")
 
-    # 1. 동일 태그 Release가 있으면 삭제 후 재생성 (매월 덮어쓰기)
+    # 1. 동일 태그 Release가 이미 존재하면 skip (27일 성공 → 28일 재실행 방지)
     existing = requests.get(f"{api_base}/releases/tags/{tag}", headers=headers)
     if existing.status_code == 200:
-        release_id = existing.json()['id']
+        existing_data = existing.json()
+        # draft가 아닌 정상 Release면 skip
+        if not existing_data.get('draft', True):
+            assets = existing_data.get('assets', [])
+            if assets:
+                download_url = assets[0].get('browser_download_url')
+                logger.info(f"⏭️  이미 당월 Release가 존재합니다. 업로드를 skip합니다.")
+                logger.info(f"🔗 기존 다운로드 링크: {download_url}")
+                return download_url
+        # draft 상태면 삭제 후 재생성
+        release_id = existing_data['id']
         requests.delete(f"{api_base}/releases/{release_id}", headers=headers)
         requests.delete(f"{api_base}/git/refs/tags/{tag}", headers=headers)
-        time.sleep(2)  # 기존 Release 삭제 후 태그 동기화 대기
-        logger.info(f"  🗑️  기존 Release({tag}) 삭제 완료")
+        time.sleep(2)
+        logger.info(f"  🗑️  Draft 상태 Release({tag}) 삭제 후 재생성합니다.")
 
     # 2. 새 Release 생성
     release_resp = requests.post(
@@ -423,7 +435,7 @@ def upload_to_github_release(file_path, target_yyyymm):
             'body':        f"{target_yyyymm[:4]}년 {int(target_yyyymm[4:])}월 소프트웨어 검사 결과 파일입니다.",
             'draft':       False,
             'prerelease':  False,
-            'make_latest': 'true'
+            'make_latest': 'true'   # 문자열로 전달해야 정상 동작
         }
     )
     if release_resp.status_code != 201:
