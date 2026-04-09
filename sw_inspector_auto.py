@@ -283,8 +283,7 @@ def send_jandi_upload_link(link_url, target_yyyymm, original_filename=None):
                     "이번 달 점검도 무사히 끝났습니다. 모두 고생 많으셨습니다!\n"
                     "제출해주신 모든 검사 결과 압축본이 준비되었습니다.\n\n"
                     f"📦 [ZIP 파일 다운로드]({link_url})\n"
-                    f"{rename_note}\n"
-                    "_(로그인 없이 다운로드 가능합니다)_\n\n"
+                    f"{rename_note}\n\n"
                     "📌 **최종 제출 방법 (참조용)**\n"
                     "압축 파일을 다운로드한 후, [소프트웨어 검사제출 게시판](https://gw.mailplug.com/board/24445)의 안내에 따라 게시글에 답글로 제출합니다."
                 )
@@ -426,7 +425,7 @@ def upload_to_github_release(file_path, target_yyyymm):
             'body':        f"{target_yyyymm[:4]}년 {int(target_yyyymm[4:])}월 소프트웨어 검사 결과 파일입니다.",
             'draft':       False,
             'prerelease':  False,
-            'make_latest': 'true'
+            'make_latest': True
         }
     )
     if release_resp.status_code != 201:
