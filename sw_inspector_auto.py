@@ -49,13 +49,16 @@ GDRIVE_SOURCE_FOLDER_ID = os.environ.get('GDRIVE_SOURCE_FOLDER_ID', '')
 # 3. 잔디 웹훅 — GitHub Secret: JANDI_WEBHOOK_URL
 JANDI_WEBHOOK_URL = os.environ.get('JANDI_WEBHOOK_URL', '')
 
-# 4. GitHub Releases 업로드용 — Actions에서 자동 제공되므로 별도 Secret 불필요
+# 4. 제출 폼 URL — GitHub Secret: FORM_URL
+FORM_URL = os.environ.get('FORM_URL', 'https://docs.google.com/forms/d/e/1FAIpQLSdr_TM1MC1YL0gXLcNOhLSfX2R6JIf74G5wn6OMcFs1FAfu3A/viewform')
+
+# 5. GitHub Releases 업로드용 — Actions에서 자동 제공되므로 별도 Secret 불필요
 #    GITHUB_TOKEN: secrets.GITHUB_TOKEN으로 yml에서 주입
 #    GITHUB_REPOSITORY: "owner/repo" 형식 (Actions 환경에서 자동 제공)
 GITHUB_TOKEN      = os.environ.get('GITHUB_TOKEN', '')
 GITHUB_REPOSITORY = os.environ.get('GITHUB_REPOSITORY', '')
 
-# 5. 임시 출력 경로 (GitHub Actions: /tmp, 로컬: 시스템 tempdir)
+# 6. 임시 출력 경로 (GitHub Actions: /tmp, 로컬: 시스템 tempdir)
 OUTPUT_DIR = os.path.join(tempfile.gettempdir(), 'sw_inspector_output')
 
 # 6. .ipt 파일명 파싱 패턴
@@ -240,7 +243,7 @@ def send_jandi_reminder(unsubmitted, target_yyyymm):
                     "바쁘시겠지만 잠시만 시간을 내어 마무리를 부탁드려요!\n\n"
                     f"미제출자: {names_text}\n"
                     "(맥 사용자는 제외했습니다. 최신 검사기가 동작하는지 확인해주세요)\n\n"
-                    "📍 [여기서 바로 제출하기](https://docs.google.com/forms/d/e/1FAIpQLSdr_TM1MC1YL0gXLcNOhLSfX2R6JIf74G5wn6OMcFs1FAfu3A/viewform)\n"
+                    f"📍 [여기서 바로 제출하기]({FORM_URL})\n"
                     "💡 이미 제출 하셨다면 답글 남겨주세요"
                 )
             }

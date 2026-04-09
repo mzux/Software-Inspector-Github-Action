@@ -66,6 +66,7 @@ jobs:
           SHEET_URL:               ${{ secrets.SHEET_URL }}
           GDRIVE_SOURCE_FOLDER_ID: ${{ secrets.GDRIVE_SOURCE_FOLDER_ID }}
           JANDI_WEBHOOK_URL:       ${{ secrets.JANDI_WEBHOOK_URL }}
+          FORM_URL:                ${{ secrets.FORM_URL }}
           GITHUB_TOKEN:            ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY:       ${{ github.repository }}
         run: |
