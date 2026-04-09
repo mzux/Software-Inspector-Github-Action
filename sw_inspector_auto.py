@@ -19,6 +19,7 @@
 import os
 import re
 import io
+import time
 import zipfile
 import argparse
 import logging
@@ -412,6 +413,7 @@ def upload_to_github_release(file_path, target_yyyymm):
         release_id = existing.json()['id']
         requests.delete(f"{api_base}/releases/{release_id}", headers=headers)
         requests.delete(f"{api_base}/git/refs/tags/{tag}", headers=headers)
+        time.sleep(2)  # 기존 Release 삭제 후 태그 동기화 대기
         logger.info(f"  🗑️  기존 Release({tag}) 삭제 완료")
 
     # 2. 새 Release 생성
@@ -419,11 +421,12 @@ def upload_to_github_release(file_path, target_yyyymm):
         f"{api_base}/releases",
         headers=headers,
         json={
-            'tag_name':   tag,
-            'name':       release_name,
-            'body':       f"{target_yyyymm[:4]}년 {int(target_yyyymm[4:])}월 소프트웨어 검사 결과 파일입니다.",
-            'draft':      False,
-            'prerelease': False
+            'tag_name':    tag,
+            'name':        release_name,
+            'body':        f"{target_yyyymm[:4]}년 {int(target_yyyymm[4:])}월 소프트웨어 검사 결과 파일입니다.",
+            'draft':       False,
+            'prerelease':  False,
+            'make_latest': 'true'
         }
     )
     if release_resp.status_code != 201:
