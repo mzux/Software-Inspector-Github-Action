@@ -49,8 +49,8 @@ GDRIVE_SOURCE_FOLDER_ID = os.environ.get('GDRIVE_SOURCE_FOLDER_ID', '')
 # 3. 잔디 웹훅 — GitHub Secret: JANDI_WEBHOOK_URL
 JANDI_WEBHOOK_URL = os.environ.get('JANDI_WEBHOOK_URL', '')
 
-# 4. 제출 폼 URL — GitHub Secret: FORM_URL
-FORM_URL = os.environ.get('FORM_URL', 'https://docs.google.com/forms/d/e/1FAIpQLSdr_TM1MC1YL0gXLcNOhLSfX2R6JIf74G5wn6OMcFs1FAfu3A/viewform')
+# 4. 구글 폼 URL — GitHub Secret: FORM_URL (독촉 메시지 링크용)
+FORM_URL = os.environ.get('FORM_URL', '')
 
 # 5. GitHub Releases 업로드용 — Actions에서 자동 제공되므로 별도 Secret 불필요
 #    GITHUB_TOKEN: secrets.GITHUB_TOKEN으로 yml에서 주입
@@ -61,11 +61,14 @@ GITHUB_REPOSITORY = os.environ.get('GITHUB_REPOSITORY', '')
 # 6. 임시 출력 경로 (GitHub Actions: /tmp, 로컬: 시스템 tempdir)
 OUTPUT_DIR = os.path.join(tempfile.gettempdir(), 'sw_inspector_output')
 
-# 6. .ipt 파일명 파싱 패턴
+# 7. .ipt 파일명 파싱 패턴
+#    날짜(8자리) 이후 접미사는 개수 제한 없이 허용
+#    예) 공26-13_손만식_20260425 - test - Mansik Sohn.ipt
 IPT_FILENAME_PATTERN = re.compile(
-    r'^(?P<equip_code>[가-힣a-zA-Z0-9]+(?:-\d+)?\d*)_(?P<n>[가-힣]+)_(?P<date>\d{8})(?:\s*-\s*[A-Za-z가-힣\s]+)?\.ipt$'
+    r'^(?P<equip_code>[가-힣a-zA-Z0-9]+(?:-\d+)?\d*)_(?P<n>[가-힣]+)_(?P<date>\d{8})(?:\s*-\s*.+)?\.ipt$'
 )
-GDRIVE_SUFFIX_PATTERN = re.compile(r'\s*-\s*[A-Za-z가-힣\s]+$')
+# 날짜(8자리) 이후의 모든 접미사 제거 → 원본 파일명으로 복원
+GDRIVE_SUFFIX_PATTERN = re.compile(r'(_\d{8}).*$')
 
 # ==========================================
 # 로깅 설정
@@ -186,6 +189,46 @@ def download_drive_file(service, file_id, dest_path):
         done = False
         while not done:
             _, done = downloader.next_chunk()
+
+
+def get_or_create_archive_folder(service, parent_folder_id):
+    """소스 폴더 하위에 Archive 폴더를 찾거나 없으면 생성합니다."""
+    try:
+        query = (
+            f"'{parent_folder_id}' in parents"
+            " and name = 'Archive'"
+            " and mimeType = 'application/vnd.google-apps.folder'"
+            " and trashed = false"
+        )
+        results = service.files().list(
+            q=query,
+            fields='files(id, name)',
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True
+        ).execute()
+        folders = results.get('files', [])
+
+        if folders:
+            logger.info(f"📂 Archive 폴더 확인: {folders[0]['id']}")
+            return folders[0]['id']
+
+        # 없으면 생성
+        folder_metadata = {
+            'name': 'Archive',
+            'mimeType': 'application/vnd.google-apps.folder',
+            'parents': [parent_folder_id]
+        }
+        folder = service.files().create(
+            body=folder_metadata,
+            fields='id',
+            supportsAllDrives=True
+        ).execute()
+        logger.info(f"📂 Archive 폴더 생성 완료: {folder['id']}")
+        return folder['id']
+
+    except Exception as e:
+        logger.warning(f"⚠️ Archive 폴더 생성/조회 실패: {e}")
+        return None
 
 
 # ==========================================
@@ -320,8 +363,13 @@ def parse_ipt_filename(filename):
 # 🚀 9. 파일명 정리 (구글 드라이브 접미사 제거)
 # ==========================================
 def clean_filename(basename):
+    """날짜(8자리) 이후의 모든 접미사를 제거합니다.
+    
+    예) 공26-13_손만식_20260425 - test - Mansik Sohn.ipt
+      → 공26-13_손만식_20260425.ipt
+    """
     name_part, ext = os.path.splitext(basename)
-    cleaned = GDRIVE_SUFFIX_PATTERN.sub('', name_part)
+    cleaned = GDRIVE_SUFFIX_PATTERN.sub(r'\1', name_part)
     return cleaned + ext
 
 
@@ -372,6 +420,26 @@ def create_submission_zip(doc, target_yyyymm, folder_id=None,
 
         logger.info(f"\n✅ 압축 완료: {target_zip_name} ({len(drive_files)}개 파일)")
         logger.info(f"📁 결과물: {target_zip_path}")
+
+        # Archive 폴더로 이동 (Drive API)
+        archive_folder_id = get_or_create_archive_folder(service, folder_id)
+        if archive_folder_id:
+            archived = 0
+            for f in drive_files:
+                try:
+                    # 파일의 부모를 소스 폴더 → Archive 폴더로 변경
+                    service.files().update(
+                        fileId=f['id'],
+                        addParents=archive_folder_id,
+                        removeParents=folder_id,
+                        supportsAllDrives=True,
+                        fields='id'
+                    ).execute()
+                    archived += 1
+                except Exception as e:
+                    logger.warning(f"⚠️ Archive 이동 실패 ({f['name']}): {e}")
+            logger.info(f"📂 {archived}개 파일을 Archive 폴더로 이동했습니다.")
+
         return target_zip_path
 
     except Exception as e:
@@ -387,46 +455,34 @@ def create_submission_zip(doc, target_yyyymm, folder_id=None,
 #   - GITHUB_TOKEN, GITHUB_REPOSITORY는 Actions에서 자동 제공
 # ==========================================
 def upload_to_github_release(file_path, target_yyyymm):
-    """ZIP 파일을 GitHub Release로 업로드하고 다운로드 URL을 반환합니다.
-    
-    - 이미 당월 Release가 존재하면 업로드를 skip하고 기존 링크를 반환합니다.
-    - Public 저장소에서 로그인 없이 누구나 다운로드 가능합니다.
-    """
+    """ZIP 파일을 GitHub Release로 업로드하고 다운로드 URL을 반환합니다."""
     if not GITHUB_TOKEN or not GITHUB_REPOSITORY:
         logger.error("❌ GITHUB_TOKEN 또는 GITHUB_REPOSITORY 환경변수가 없습니다.")
         return None
 
-    filename        = os.path.basename(file_path)
-    upload_filename = f"{target_yyyymm}_SW-Inspection.zip"  # API 한글 오류 우회
-    tag             = f"release-{target_yyyymm}"
-    release_name    = f"{target_yyyymm[:4]}년 {int(target_yyyymm[4:])}월 소프트웨어 검사 결과"
-    api_base        = f"https://api.github.com/repos/{GITHUB_REPOSITORY}"
-    headers         = {
-        'Authorization':       f'Bearer {GITHUB_TOKEN}',
-        'Accept':              'application/vnd.github+json',
-        'X-GitHub-Api-Version':'2022-11-28'
+    filename     = os.path.basename(file_path)
+    # 업로드용 영문 파일명 (GitHub API 한글 오류 우회)
+    upload_filename = f"{target_yyyymm}_SW-Inspection.zip"
+    
+    tag          = f"release-{target_yyyymm}"
+    release_name = f"{target_yyyymm[:4]}년 {int(target_yyyymm[4:])}월 소프트웨어 검사 결과"
+    api_base     = f"https://api.github.com/repos/{GITHUB_REPOSITORY}"
+    headers      = {
+        'Authorization': f'Bearer {GITHUB_TOKEN}',
+        'Accept': 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28'
     }
 
     logger.info(f"\n▶ GitHub Release 업로드 시작: {filename} (업로드명: {upload_filename})")
 
-    # 1. 동일 태그 Release가 이미 존재하면 skip (27일 성공 → 28일 재실행 방지)
+    # 1. 동일 태그 Release가 있으면 삭제 후 재생성 (매월 덮어쓰기)
     existing = requests.get(f"{api_base}/releases/tags/{tag}", headers=headers)
     if existing.status_code == 200:
-        existing_data = existing.json()
-        # draft가 아닌 정상 Release면 skip
-        if not existing_data.get('draft', True):
-            assets = existing_data.get('assets', [])
-            if assets:
-                download_url = assets[0].get('browser_download_url')
-                logger.info(f"⏭️  이미 당월 Release가 존재합니다. 업로드를 skip합니다.")
-                logger.info(f"🔗 기존 다운로드 링크: {download_url}")
-                return download_url
-        # draft 상태면 삭제 후 재생성
-        release_id = existing_data['id']
+        release_id = existing.json()['id']
         requests.delete(f"{api_base}/releases/{release_id}", headers=headers)
         requests.delete(f"{api_base}/git/refs/tags/{tag}", headers=headers)
-        time.sleep(2)
-        logger.info(f"  🗑️  Draft 상태 Release({tag}) 삭제 후 재생성합니다.")
+        time.sleep(2)  # 기존 Release 삭제 후 태그 동기화 대기
+        logger.info(f"  🗑️  기존 Release({tag}) 삭제 완료")
 
     # 2. 새 Release 생성
     release_resp = requests.post(
@@ -438,7 +494,7 @@ def upload_to_github_release(file_path, target_yyyymm):
             'body':        f"{target_yyyymm[:4]}년 {int(target_yyyymm[4:])}월 소프트웨어 검사 결과 파일입니다.",
             'draft':       False,
             'prerelease':  False,
-            'make_latest': 'true'   # 문자열로 전달해야 정상 동작
+            'make_latest': True
         }
     )
     if release_resp.status_code != 201:
