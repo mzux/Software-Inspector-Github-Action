@@ -310,16 +310,26 @@ def send_jandi_reminder(unsubmitted, target_yyyymm):
 # ==========================================
 # 🚀 7. Jandi 웹훅 — 업로드 완료 알림
 # ==========================================
-def send_jandi_upload_link(link_url, target_yyyymm, original_filename=None):
+def send_jandi_upload_link(link_url, target_yyyymm, original_filename=None, excluded_files=None):
     if not JANDI_WEBHOOK_URL:
         return False
 
     display_month = f"{target_yyyymm[:4]}년 {int(target_yyyymm[4:])}월"
     rename_note = f"\n📝 다운로드 후 파일명을 `{original_filename}`으로 변경 후 제출해주세요." if original_filename else ""
 
+    # 제외된 파일이 있을 경우 경고 섹션 추가
+    excluded_note = ""
+    if excluded_files:
+        file_list = "\n".join([f"  - {f['name']}" for f in excluded_files])
+        excluded_note = (
+            f"\n\n⚠️ **아래 파일은 처리에서 제외됐으니 확인이 필요합니다** ({len(excluded_files)}개)\n"
+            f"{file_list}\n"
+            "(비대상자 파일, 파싱 불가 파일, 또는 중복 파일일 수 있습니다.)"
+        )
+
     payload = {
         "body": "소프트웨어 검사 마무리",
-        "connectColor": "#00C300",
+        "connectColor": "#00C300" if not excluded_files else "#FFA500",
         "connectInfo": [
             {
                 "title": f"🎉 {display_month} 소프트웨어 검사 취합 완료",
@@ -330,6 +340,7 @@ def send_jandi_upload_link(link_url, target_yyyymm, original_filename=None):
                     f"{rename_note}\n\n"
                     "📌 **최종 제출 방법 (참조용)**\n"
                     "압축 파일을 다운로드한 후, [소프트웨어 검사제출 게시판](https://gw.mailplug.com/board/24445)의 안내에 따라 게시글에 답글로 제출합니다."
+                    f"{excluded_note}"
                 )
             }
         ]
@@ -379,6 +390,13 @@ def clean_filename(basename):
 def create_submission_zip(doc, target_yyyymm, folder_id=None,
                           team_name='AI에듀테크', submitter='손만식',
                           dry_run=False):
+    """Drive .ipt 파일을 필터링하여 ZIP으로 압축합니다.
+    
+    - 대상자 목록에 없는 파일은 제외 (경고)
+    - 동일인 파일이 여러 개면 가장 최신 날짜 파일만 포함 (나머지 경고)
+    - 처리에서 제외된 파일은 Archive로 이동하지 않음
+    - 반환값: (zip_path, excluded_files) 튜플
+    """
     folder_id = folder_id or GDRIVE_SOURCE_FOLDER_ID
     logger.info(f"\n▶ 파일 {'미리보기(dry-run)' if dry_run else '압축'} 시작...")
     logger.info(f"📂 Drive 소스 폴더 ID: {folder_id}")
@@ -388,46 +406,86 @@ def create_submission_zip(doc, target_yyyymm, folder_id=None,
     drive_files = list_drive_ipt_files(folder_id)
     if not drive_files:
         logger.warning("⚠️ .ipt 파일이 없습니다. Drive 폴더 ID를 확인하세요.")
-        return None
+        return None, []
 
+    # ── 파일 분류 ──────────────────────────────────────────
+    target_members = get_target_members(doc)
+    target_set = set(target_members)
+
+    unparseable   = []   # 파일명 파싱 실패
+    non_target    = []   # 대상자 목록에 없는 사람
+    by_name       = {}   # {이름: [(날짜, 파일), ...]}
+
+    for f in drive_files:
+        parsed = parse_ipt_filename(f['name'])
+        if not parsed:
+            logger.warning(f"⚠️ 파일명 파싱 실패 → 제외: {f['name']}")
+            unparseable.append(f)
+            continue
+        name = parsed['n']
+        date = parsed['date']
+        if name not in target_set:
+            logger.warning(f"⚠️ 대상자 아님 → 제외: {f['name']} (이름: {name})")
+            non_target.append(f)
+            continue
+        by_name.setdefault(name, []).append((date, f))
+
+    # 중복 처리: 최신 날짜 1개만 유지
+    valid_files       = []
+    skipped_duplicate = []
+    for name, entries in by_name.items():
+        entries.sort(key=lambda x: x[0], reverse=True)  # 날짜 내림차순
+        valid_files.append(entries[0][1])                # 최신 파일 선택
+        for _, f in entries[1:]:
+            logger.warning(f"⚠️ 중복 파일 (최신 아님) → 제외: {f['name']} (이름: {name})")
+            skipped_duplicate.append(f)
+
+    excluded_files = unparseable + non_target + skipped_duplicate
+
+    # ── 요약 로그 ──────────────────────────────────────────
     target_zip_name = f"{target_yyyymm}_{team_name}_{submitter}.zip"
     target_zip_path = os.path.join(OUTPUT_DIR, target_zip_name)
 
     logger.info(f"\n{'📋 미리보기' if dry_run else '📦 압축 대상'}: {target_zip_name}")
-    for f in drive_files:
+    logger.info(f"  ✅ 포함: {len(valid_files)}개 / 제외: {len(excluded_files)}개")
+    for f in valid_files:
         cleaned = clean_filename(f['name'])
-        if f['name'] != cleaned:
-            logger.info(f"    ↳ {f['name']}")
-            logger.info(f"      → {cleaned}  (접미사 제거)")
-        else:
-            logger.info(f"    ↳ {cleaned}")
+        label = f" → {cleaned}  (접미사 제거)" if f['name'] != cleaned else ""
+        logger.info(f"    ↳ {f['name']}{label}")
+    if excluded_files:
+        logger.info("  ⚠️ 제외 파일:")
+        for f in excluded_files:
+            logger.info(f"    ✖ {f['name']}")
 
     if dry_run:
-        logger.info(f"\n🔍 미리보기 완료: {len(drive_files)}개 파일 → {target_zip_name}")
-        return len(drive_files)
+        logger.info(f"\n🔍 미리보기 완료: {len(valid_files)}개 파일 → {target_zip_name}")
+        return len(valid_files), excluded_files
+
+    if not valid_files:
+        logger.warning("⚠️ 압축할 유효한 파일이 없습니다.")
+        return None, excluded_files
 
     service = get_drive_service()
     tmp_dir = tempfile.mkdtemp(prefix='sw_inspector_dl_')
 
     try:
         with zipfile.ZipFile(target_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for f in drive_files:
+            for f in valid_files:
                 tmp_path = os.path.join(tmp_dir, f['name'])
                 logger.info(f"  ⬇️  다운로드: {f['name']}")
                 download_drive_file(service, f['id'], tmp_path)
                 cleaned = clean_filename(f['name'])
                 zipf.write(tmp_path, cleaned)
 
-        logger.info(f"\n✅ 압축 완료: {target_zip_name} ({len(drive_files)}개 파일)")
+        logger.info(f"\n✅ 압축 완료: {target_zip_name} ({len(valid_files)}개 파일)")
         logger.info(f"📁 결과물: {target_zip_path}")
 
-        # Archive 폴더로 이동 (Drive API)
+        # ── Archive 이동 (처리된 파일만) ────────────────────
         archive_folder_id = get_or_create_archive_folder(service, folder_id)
         if archive_folder_id:
             archived = 0
-            for f in drive_files:
+            for f in valid_files:   # excluded_files는 이동하지 않음
                 try:
-                    # 파일의 부모를 소스 폴더 → Archive 폴더로 변경
                     service.files().update(
                         fileId=f['id'],
                         addParents=archive_folder_id,
@@ -439,12 +497,14 @@ def create_submission_zip(doc, target_yyyymm, folder_id=None,
                 except Exception as e:
                     logger.warning(f"⚠️ Archive 이동 실패 ({f['name']}): {e}")
             logger.info(f"📂 {archived}개 파일을 Archive 폴더로 이동했습니다.")
+            if excluded_files:
+                logger.info(f"📂 제외된 {len(excluded_files)}개 파일은 소스 폴더에 유지합니다.")
 
-        return target_zip_path
+        return target_zip_path, excluded_files
 
     except Exception as e:
         logger.error(f"❌ 압축 실패: {e}")
-        return None
+        return None, excluded_files
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -565,7 +625,7 @@ def run(args):
         )
 
     elif args.command == 'upload':
-        zip_path = create_submission_zip(
+        zip_path, excluded_files = create_submission_zip(
             doc, target_yyyymm,
             folder_id=folder_id,
             team_name=args.team,
@@ -576,7 +636,8 @@ def run(args):
             original_filename = os.path.basename(zip_path)
             link = upload_to_github_release(zip_path, target_yyyymm)
             if link and args.notify:
-                send_jandi_upload_link(link, target_yyyymm, original_filename)
+                send_jandi_upload_link(link, target_yyyymm, original_filename,
+                                       excluded_files=excluded_files or None)
 
     elif args.command == 'all':
         # ─────────────────────────────────────────────
@@ -592,7 +653,7 @@ def run(args):
             sys.exit(2)
 
         logger.info("✅ 모든 대상자 제출 완료. 압축 및 업로드를 진행합니다.")
-        zip_path = create_submission_zip(
+        zip_path, excluded_files = create_submission_zip(
             doc, target_yyyymm,
             folder_id=folder_id,
             team_name=args.team,
@@ -603,7 +664,8 @@ def run(args):
             original_filename = os.path.basename(zip_path)
             link = upload_to_github_release(zip_path, target_yyyymm)
             if link and args.notify:
-                send_jandi_upload_link(link, target_yyyymm, original_filename)
+                send_jandi_upload_link(link, target_yyyymm, original_filename,
+                                       excluded_files=excluded_files or None)
 
     else:
         logger.info("사용법: python sw_inspector_auto.py {check|zip|upload|all} [옵션]")
