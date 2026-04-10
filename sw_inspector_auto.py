@@ -494,7 +494,7 @@ def upload_to_github_release(file_path, target_yyyymm):
             'body':        f"{target_yyyymm[:4]}년 {int(target_yyyymm[4:])}월 소프트웨어 검사 결과 파일입니다.",
             'draft':       False,
             'prerelease':  False,
-            'make_latest': True
+            'make_latest': 'true'   # GitHub API 요구사항: bool이 아닌 문자열 전달
         }
     )
     if release_resp.status_code != 201:
