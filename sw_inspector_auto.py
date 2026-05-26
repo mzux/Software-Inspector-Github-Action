@@ -105,22 +105,42 @@ def get_gsheet_client():
     if not SHEET_URL:
         logger.error("❌ SHEET_URL 환경변수가 설정되지 않았습니다.")
         return None
-    try:
-        gc = gspread.service_account(filename=CREDENTIALS_FILE)
-        doc = gc.open_by_url(SHEET_URL)
-        logger.info("✅ 구글 시트 연결 성공")
-        return doc
-    except Exception as e:
-        logger.error(f"❌ 구글 시트 접근 실패. credentials.json 파일과 시트 공유 권한을 확인하세요.\n({e})")
-        return None
+    
+    max_retries = 3
+    delay = 2
+    for attempt in range(1, max_retries + 1):
+        try:
+            gc = gspread.service_account(filename=CREDENTIALS_FILE)
+            doc = gc.open_by_url(SHEET_URL)
+            logger.info("✅ 구글 시트 연결 성공")
+            return doc
+        except Exception as e:
+            if attempt == max_retries:
+                logger.error(f"❌ 구글 시트 접근 최종 실패. credentials.json 파일과 시트 공유 권한을 확인하세요.\n({e})")
+                return None
+            logger.warning(f"⚠️ 구글 시트 연결 오류: {e}. {delay}초 후 재시도합니다... (시도 {attempt}/{max_retries})")
+            time.sleep(delay)
+            delay *= 2
 
 
 # ==========================================
 # 🚀 2. 제출 대상자 목록 가져오기
 # ==========================================
 def get_target_members(doc):
-    member_sheet = doc.worksheet(TAB_MEMBERS)
-    members = member_sheet.get_all_records()
+    max_retries = 3
+    delay = 2
+    for attempt in range(1, max_retries + 1):
+        try:
+            member_sheet = doc.worksheet(TAB_MEMBERS)
+            members = member_sheet.get_all_records()
+            break
+        except Exception as e:
+            if attempt == max_retries:
+                logger.error(f"❌ 제출 대상자 목록 가져오기 최종 실패: {e}")
+                raise e
+            logger.warning(f"⚠️ 제출 대상자 목록 가져오기 오류: {e}. {delay}초 후 재시도합니다... (시도 {attempt}/{max_retries})")
+            time.sleep(delay)
+            delay *= 2
 
     target_members = []
     for member in members:
@@ -138,8 +158,20 @@ def get_target_members(doc):
 # 🚀 3. 이번 달 폼 응답 건수 확인
 # ==========================================
 def get_form_submission_count(doc, target_yyyymm):
-    resp_sheet = doc.worksheet(TAB_RESPONSES)
-    responses = resp_sheet.get_all_records()
+    max_retries = 3
+    delay = 2
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp_sheet = doc.worksheet(TAB_RESPONSES)
+            responses = resp_sheet.get_all_records()
+            break
+        except Exception as e:
+            if attempt == max_retries:
+                logger.error(f"❌ 폼 응답 목록 가져오기 최종 실패: {e}")
+                raise e
+            logger.warning(f"⚠️ 폼 응답 목록 가져오기 오류: {e}. {delay}초 후 재시도합니다... (시도 {attempt}/{max_retries})")
+            time.sleep(delay)
+            delay *= 2
 
     count = 0
     for row in responses:
@@ -167,68 +199,101 @@ def get_form_submission_count(doc, target_yyyymm):
 def list_drive_ipt_files(folder_id):
     service = get_drive_service()
     query = f"'{folder_id}' in parents and name contains '.ipt' and trashed = false"
-    results = service.files().list(
-        q=query,
-        fields='files(id, name)',
-        supportsAllDrives=True,
-        includeItemsFromAllDrives=True,
-        pageSize=200
-    ).execute()
+    
+    max_retries = 3
+    delay = 2
+    for attempt in range(1, max_retries + 1):
+        try:
+            results = service.files().list(
+                q=query,
+                fields='files(id, name)',
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+                pageSize=200
+            ).execute()
+            break
+        except Exception as e:
+            if attempt == max_retries:
+                logger.error(f"❌ Drive 파일 목록 조회 최종 실패: {e}")
+                raise e
+            logger.warning(f"⚠️ Drive 파일 목록 조회 오류: {e}. {delay}초 후 재시도합니다... (시도 {attempt}/{max_retries})")
+            time.sleep(delay)
+            delay *= 2
+
     files = results.get('files', [])
     logger.info(f"📂 Drive .ipt 파일: {len(files)}개")
     return files
 
 
 def download_drive_file(service, file_id, dest_path):
-    request = service.files().get_media(
-        fileId=file_id,
-        supportsAllDrives=True
-    )
-    with open(dest_path, 'wb') as f:
-        downloader = MediaIoBaseDownload(f, request)
-        done = False
-        while not done:
-            _, done = downloader.next_chunk()
+    max_retries = 3
+    delay = 2
+    for attempt in range(1, max_retries + 1):
+        try:
+            request = service.files().get_media(
+                fileId=file_id,
+                supportsAllDrives=True
+            )
+            with open(dest_path, 'wb') as f:
+                downloader = MediaIoBaseDownload(f, request)
+                done = False
+                while not done:
+                    _, done = downloader.next_chunk()
+            return
+        except Exception as e:
+            if attempt == max_retries:
+                logger.error(f"❌ Drive 파일 다운로드 최종 실패 (ID: {file_id}): {e}")
+                raise e
+            logger.warning(f"⚠️ Drive 파일 다운로드 오류: {e}. {delay}초 후 재시도합니다... (시도 {attempt}/{max_retries})")
+            time.sleep(delay)
+            delay *= 2
 
 
 def get_or_create_archive_folder(service, parent_folder_id):
     """소스 폴더 하위에 Archive 폴더를 찾거나 없으면 생성합니다."""
-    try:
-        query = (
-            f"'{parent_folder_id}' in parents"
-            " and name = 'Archive'"
-            " and mimeType = 'application/vnd.google-apps.folder'"
-            " and trashed = false"
-        )
-        results = service.files().list(
-            q=query,
-            fields='files(id, name)',
-            supportsAllDrives=True,
-            includeItemsFromAllDrives=True
-        ).execute()
-        folders = results.get('files', [])
+    max_retries = 3
+    delay = 2
+    for attempt in range(1, max_retries + 1):
+        try:
+            query = (
+                f"'{parent_folder_id}' in parents"
+                " and name = 'Archive'"
+                " and mimeType = 'application/vnd.google-apps.folder'"
+                " and trashed = false"
+            )
+            results = service.files().list(
+                q=query,
+                fields='files(id, name)',
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True
+            ).execute()
+            folders = results.get('files', [])
 
-        if folders:
-            logger.info(f"📂 Archive 폴더 확인: {folders[0]['id']}")
-            return folders[0]['id']
+            if folders:
+                logger.info(f"📂 Archive 폴더 확인: {folders[0]['id']}")
+                return folders[0]['id']
 
-        # 없으면 생성
-        folder_metadata = {
-            'name': 'Archive',
-            'mimeType': 'application/vnd.google-apps.folder',
-            'parents': [parent_folder_id]
-        }
-        folder = service.files().create(
-            body=folder_metadata,
-            fields='id',
-            supportsAllDrives=True
-        ).execute()
-        logger.info(f"📂 Archive 폴더 생성 완료: {folder['id']}")
-        return folder['id']
+            # 없으면 생성
+            folder_metadata = {
+                'name': 'Archive',
+                'mimeType': 'application/vnd.google-apps.folder',
+                'parents': [parent_folder_id]
+            }
+            folder = service.files().create(
+                body=folder_metadata,
+                fields='id',
+                supportsAllDrives=True
+            ).execute()
+            logger.info(f"📂 Archive 폴더 생성 완료: {folder['id']}")
+            return folder['id']
 
-    except Exception as e:
-        logger.warning(f"⚠️ Archive 폴더 생성/조회 실패: {e}")
-        return None
+        except Exception as e:
+            if attempt == max_retries:
+                logger.warning(f"⚠️ Archive 폴더 생성/조회 최종 실패: {e}")
+                return None
+            logger.warning(f"⚠️ Archive 폴더 생성/조회 오류: {e}. {delay}초 후 재시도합니다... (시도 {attempt}/{max_retries})")
+            time.sleep(delay)
+            delay *= 2
 
 
 # ==========================================
@@ -485,17 +550,26 @@ def create_submission_zip(doc, target_yyyymm, folder_id=None,
         if archive_folder_id:
             archived = 0
             for f in valid_files:   # excluded_files는 이동하지 않음
-                try:
-                    service.files().update(
-                        fileId=f['id'],
-                        addParents=archive_folder_id,
-                        removeParents=folder_id,
-                        supportsAllDrives=True,
-                        fields='id'
-                    ).execute()
-                    archived += 1
-                except Exception as e:
-                    logger.warning(f"⚠️ Archive 이동 실패 ({f['name']}): {e}")
+                max_retries = 3
+                delay = 2
+                for attempt in range(1, max_retries + 1):
+                    try:
+                        service.files().update(
+                            fileId=f['id'],
+                            addParents=archive_folder_id,
+                            removeParents=folder_id,
+                            supportsAllDrives=True,
+                            fields='id'
+                        ).execute()
+                        archived += 1
+                        break
+                    except Exception as e:
+                        if attempt == max_retries:
+                            logger.warning(f"⚠️ Archive 이동 최종 실패 ({f['name']}): {e}")
+                        else:
+                            logger.warning(f"⚠️ Archive 이동 오류 ({f['name']}): {e}. {delay}초 후 재시도합니다... (시도 {attempt}/{max_retries})")
+                            time.sleep(delay)
+                            delay *= 2
             logger.info(f"📂 {archived}개 파일을 Archive 폴더로 이동했습니다.")
             if excluded_files:
                 logger.info(f"📂 제외된 {len(excluded_files)}개 파일은 소스 폴더에 유지합니다.")
