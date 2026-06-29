@@ -656,6 +656,40 @@ def upload_to_github_release(file_path, target_yyyymm):
     return download_url
 
 
+def is_release_exists(target_yyyymm):
+    """해당 월의 GitHub Release가 이미 존재하는지 확인합니다."""
+    if not GITHUB_TOKEN or not GITHUB_REPOSITORY:
+        # 환경변수가 설정되지 않은 환경(예: 로컬 개발)에서는 조기 종료를 수행하지 않도록 False 반환
+        return False
+
+    tag = f"release-{target_yyyymm}"
+    api_base = f"https://api.github.com/repos/{GITHUB_REPOSITORY}"
+    headers = {
+        'Authorization': f'Bearer {GITHUB_TOKEN}',
+        'Accept': 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28'
+    }
+
+    max_retries = 3
+    delay = 2
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.get(f"{api_base}/releases/tags/{tag}", headers=headers, timeout=10)
+            if resp.status_code == 200:
+                return True
+            elif resp.status_code == 404:
+                return False
+            else:
+                resp.raise_for_status()
+        except Exception as e:
+            if attempt == max_retries:
+                logger.warning(f"⚠️ GitHub Release 존재 여부 확인 실패: {e}")
+                return False
+            time.sleep(delay)
+            delay *= 2
+    return False
+
+
 # ==========================================
 # 📅 12. 월 전환 로직
 # ==========================================
@@ -677,6 +711,12 @@ def run(args):
     logger.info(f"═══════════════════════════════════════")
     logger.info(f"  소프트웨어 검사결과 자동화 ({target_yyyymm})")
     logger.info(f"═══════════════════════════════════════")
+
+    # 이미 릴리즈가 존재하는지 체크 (취합 완료 여부 판단)
+    if not args.force and is_release_exists(target_yyyymm):
+        logger.info(f"🎉 {target_yyyymm} 소프트웨어 취합 결과가 이미 GitHub Releases에 등록되어 있습니다.")
+        logger.info(f"🔁 이번 달 취합 및 배포가 완료되었으므로 작업을 스킵하고 정상 종료합니다.")
+        sys.exit(0)
 
     doc = get_gsheet_client()
     if not doc:
@@ -778,6 +818,8 @@ def main():
                         help='미제출자 발견 시 Jandi 웹훅으로 독촉 메시지 발송')
     parser.add_argument('--dry-run', '-d', action='store_true',
                         help='실제 파일 조작 없이 결과만 미리보기')
+    parser.add_argument('--force', '-f', action='store_true',
+                        help='이미 취합 완료(GitHub Release 존재) 상태이더라도 강제로 작업을 수행합니다.')
 
     args = parser.parse_args()
     run(args)
