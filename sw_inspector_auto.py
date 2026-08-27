@@ -458,7 +458,7 @@ def create_submission_zip(doc, target_yyyymm, folder_id=None,
     """Drive .ipt 파일을 필터링하여 ZIP으로 압축합니다.
     
     - 대상자 목록에 없는 파일은 제외 (경고)
-    - 동일인 파일이 여러 개면 가장 최신 날짜 파일만 포함 (나머지 경고)
+    - 동일 장비 파일이 여러 개면 가장 최신 날짜 파일만 포함 (나머지 경고)
     - 처리에서 제외된 파일은 Archive로 이동하지 않음
     - 반환값: (zip_path, excluded_files) 튜플
     """
@@ -479,7 +479,7 @@ def create_submission_zip(doc, target_yyyymm, folder_id=None,
 
     unparseable   = []   # 파일명 파싱 실패
     non_target    = []   # 대상자 목록에 없는 사람
-    by_name       = {}   # {이름: [(날짜, 파일), ...]}
+    by_equip      = {}   # {장비코드: [(날짜, 파일), ...]}
 
     for f in drive_files:
         parsed = parse_ipt_filename(f['name'])
@@ -489,20 +489,21 @@ def create_submission_zip(doc, target_yyyymm, folder_id=None,
             continue
         name = parsed['n']
         date = parsed['date']
+        equip = parsed['equip_code']
         if name not in target_set:
             logger.warning(f"⚠️ 대상자 아님 → 제외: {f['name']} (이름: {name})")
             non_target.append(f)
             continue
-        by_name.setdefault(name, []).append((date, f))
+        by_equip.setdefault(equip, []).append((date, f))
 
-    # 중복 처리: 최신 날짜 1개만 유지
+    # 중복 처리: 장비코드 기준 가장 최신 날짜 1개만 유지
     valid_files       = []
     skipped_duplicate = []
-    for name, entries in by_name.items():
+    for equip, entries in by_equip.items():
         entries.sort(key=lambda x: x[0], reverse=True)  # 날짜 내림차순
         valid_files.append(entries[0][1])                # 최신 파일 선택
         for _, f in entries[1:]:
-            logger.warning(f"⚠️ 중복 파일 (최신 아님) → 제외: {f['name']} (이름: {name})")
+            logger.warning(f"⚠️ 중복 파일 (최신 아님) → 제외: {f['name']} (장비코드: {equip})")
             skipped_duplicate.append(f)
 
     excluded_files = unparseable + non_target + skipped_duplicate
