@@ -1,0 +1,16 @@
+name: Keep Actions Alive
+
+on:
+  schedule:
+    # 50일마다 한 번씩 실행 (GitHub의 60일 제한 방지)
+    - cron: "0 0 1,15 * *"
+  workflow_dispatch:
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: gautamkrishnar/keepalive-workflow@v2
