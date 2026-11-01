@@ -2,7 +2,7 @@ name: Keep Actions Alive
 
 on:
   schedule:
-    # 50일마다 한 번씩 실행 (GitHub의 60일 제한 방지)
+    # 매달 1일과 15일 00:00 UTC에 실행 (약 15일 주기)
     - cron: "0 0 1,15 * *"
   workflow_dispatch:
 
@@ -12,5 +12,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: gautamkrishnar/keepalive-workflow@v2
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Push empty commit
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "chore: keep repository active [skip ci]"
+          git push
